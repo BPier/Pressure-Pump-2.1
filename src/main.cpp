@@ -11,17 +11,37 @@
   - G 1/2 Water Flow Sensor
     https://my.cytron.io/p-g-1-2-water-flow-sensor
  */
+// ===== Blynk Parameters =====
+#define BLYNK_TEMPLATE_ID           "TMPLyOjK1eom"
+#define BLYNK_DEVICE_NAME           "Quickstart Device"
+#define BLYNK_AUTH_TOKEN            "oKLzWGjqnvWtjT-iXjAlUw-vuiKLCmrk"
+// Comment this out to disable prints and save space
+#define BLYNK_PRINT Serial
 
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <BlynkSimpleEsp32.h>
+char auth[] = BLYNK_AUTH_TOKEN;
+// Your WiFi credentials.
+// Set password to "" for open networks.
+char ssid[] = "TownHouse";
+char pass[] = "Itsraining";
+BlynkTimer timer;
+
+bool YNBlynkSetup = false;
 // ======================
 // ===== Define PIN =====
 // ======================
 #define LED_BUILTIN 2
 #define FLOWSENSOR  27
-#define PRESSURESENSOR 32
+#define PRESSURESENSOR 35
+#define PumpPin 18
 boolean ledState = LOW;
 long currentMillis = 0;
 long previousMillis = 0;
 int interval = 1000;
+// === PumpVariable ===
+int PumpStatus = 0;
 
 // ======================
 // === Flow Variables ===
@@ -40,8 +60,8 @@ float PressureValue = 0.000;
 // For a perfect 100psi sensor - A=25 ; B=-12.5
 // La formule de la pression est 
 // A * Voltage + B = Pressure
-float PressureCalibrationA = 23.364;
-float PressureCalibrationB = -5.1402;//-12.5
+float PressureCalibrationA = 25;
+float PressureCalibrationB = -12.5;//-12.5
 
 
 // ----- Flow Functions -----
@@ -61,7 +81,6 @@ void displayFlow(float FlowValue)//, unsigned long TotalValue)
     Serial.print("Flow rate: ");
     Serial.print(int(FlowValue));  // Print the integer part of the variable
     Serial.println("L/min");
-  
 }
 float GetFlow(long PreviousFlowMillis)
 {
@@ -84,6 +103,49 @@ float GetFlow(long PreviousFlowMillis)
 }
 // --------------------------
 
+
+// ----- Blynk Functions -----
+BLYNK_WRITE(V0)
+{
+  // This function is called every time the Virtual Pin 0 state changes
+  // Set incoming value from pin V0 to a variable
+  int value = param.asInt();
+
+  // Update state
+  Blynk.virtualWrite(V1, value);
+}
+BLYNK_CONNECTED()
+{
+  // This function is called every time the device is connected to the Blynk.Cloud
+  // Change Web Link Button message to "Congratulations!"
+  Blynk.setProperty(V3, "offImageUrl", "https://static-image.nyc3.cdn.digitaloceanspaces.com/general/fte/congratulations.png");
+  Blynk.setProperty(V3, "onImageUrl",  "https://static-image.nyc3.cdn.digitaloceanspaces.com/general/fte/congratulations_pressed.png");
+  Blynk.setProperty(V3, "url", "https://docs.blynk.io/en/getting-started/what-do-i-need-to-blynk/how-quickstart-device-was-made");
+}
+void myTimerEvent()
+{
+// This function sends Arduino's uptime every second to Virtual Pin 2.
+  // You can send any value at any time.
+  // Please don't send more that 10 values per second.
+  Blynk.virtualWrite(V2, millis() / 1000);
+}
+void BlynkSetup()
+{
+  // Blynk
+  Blynk.begin(auth, ssid, pass);
+  // You can also specify server:
+  //Blynk.begin(auth, ssid, pass, "blynk.cloud", 80);
+  //Blynk.begin(auth, ssid, pass, IPAddress(192,168,1,100), 8080);
+  // Setup a function to be called every second
+  timer.setInterval(1000L, myTimerEvent);
+  YNBlynkSetup=true;
+}
+void SendBlynkValue()
+{
+  Blynk.virtualWrite(V5, float(PressureValue));
+  Blynk.virtualWrite(V6, flow);
+  Blynk.virtualWrite(V7,int(PumpStatus));
+}
 // ----- Pressure Functions -----
 void SetupPressure()
 {
@@ -96,19 +158,21 @@ void displayPressure(float PressureValue)//, unsigned long TotalValue)
     Serial.print("Pressure: ");
     Serial.print(float(PressureValue));  // Print the integer part of the variable
     Serial.println(" Bar");
+    
   
 }
 float GetPressure(const char PinSensor)
 {  
   float pressure = 0.00;
-  float pressure1 = analogRead(PinSensor);//read the pressure
-  delay(10);
-  float pressure2 = analogRead(PinSensor);
-  delay(10);
-  float pressure3 = analogRead(PinSensor);
-  pressure = (pressure1+pressure2+pressure3)/3; //average the readings
+  int PressureReading[5];
+  for (byte i = 0; i<5; i = i+1 )
+  {
+    PressureReading[i] = analogRead(PinSensor);
+    delay(10);
+  }
+  pressure = (PressureReading[1]+PressureReading[2]+PressureReading[3])/3; //average the readings
   pressure = pressure*4.8/4095; //voltage
-  Serial.print("Voltage =");Serial.print(pressure1);Serial.print(" - ");Serial.print(pressure2);Serial.print(" - ");Serial.print(pressure3);Serial.print(" -  ");Serial.print(pressure);Serial.println(" V ");
+  Serial.print("Voltage =");Serial.print(PressureReading[1]);Serial.print(" - ");Serial.print(PressureReading[2]);Serial.print(" - ");Serial.print(PressureReading[3]);Serial.print(" -  ");Serial.print(pressure);Serial.println(" V ");
   pressure = PressureCalibrationA*pressure+PressureCalibrationB;// Pressure in PSI
   Serial.print("Pressure: ");Serial.print(pressure);Serial.println(" PSI");
   pressure = pressure/14.503773800722; // Convert PSI to BAR
@@ -118,11 +182,35 @@ float GetPressure(const char PinSensor)
 // ------------------------------
 
 // ----- Pump Function -----
+void SetupPump()
+{
+  pinMode(PumpPin,OUTPUT);
+}
 void StartPump()
 {
-  
+  digitalWrite(PumpPin,HIGH);
+  PumpStatus=1;
+  Blynk.logEvent("pump_start", String("The Pump has started"));
+}
+void StopPump()
+{
+  digitalWrite(PumpPin,LOW);
+  PumpStatus=0;
+}
+void PumpStartCycle()
+{
+  StartPump();
+  delay(1000);
+  StopPump();
 }
 
+// ====== Loops MultiCore ======
+void loop1(){
+
+}
+void loop2(){
+
+}
 //==========================================
 //================ Setup ===================
 //==========================================
@@ -135,7 +223,9 @@ void setup()
   previousMillis = 0;
   SetupFlow();
   SetupPressure();
-  
+  SetupPump();
+  PumpStartCycle();
+  BlynkSetup();
 }
 
 
@@ -148,11 +238,23 @@ void loop()
   if (currentMillis - previousMillis > interval) {
     flow = GetFlow(previousMillis);
     displayFlow(flow);
-
+    if (flow>1)
+    {
+      StartPump();
+    }
+    else{
+      StopPump();
+    }
     PressureValue = GetPressure(PRESSURESENSOR);
     displayPressure(PressureValue);
     previousMillis = millis();
     Serial.println("---------------------------------------------------------");
+    SendBlynkValue();
+    Serial.println(xPortGetCoreID());
+  }
+  if (YNBlynkSetup=true) {
+    Blynk.run();
+    timer.run();
   }
 
 }
