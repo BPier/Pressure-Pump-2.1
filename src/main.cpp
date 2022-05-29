@@ -29,6 +29,7 @@ char pass[] = "Itsraining";
 BlynkTimer timer;
 
 bool YNBlynkSetup = false;
+int BlynkPumpSwitch = 0;
 // ======================
 // ===== Define PIN =====
 // ======================
@@ -42,6 +43,7 @@ long previousMillis = 0;
 int interval = 1000;
 // === PumpVariable ===
 int PumpStatus = 0;
+int PumpRunningTime = 0;
 
 // ======================
 // === Flow Variables ===
@@ -146,6 +148,7 @@ void SendBlynkValue()
   Blynk.virtualWrite(V6, flow);
   Blynk.virtualWrite(V7,int(PumpStatus));
 }
+
 // ----- Pressure Functions -----
 void SetupPressure()
 {
@@ -164,13 +167,16 @@ void displayPressure(float PressureValue)//, unsigned long TotalValue)
 float GetPressure(const char PinSensor)
 {  
   float pressure = 0.00;
-  int PressureReading[5];
-  for (byte i = 0; i<5; i = i+1 )
+  int PressureReading[10];
+  //Get a set of values
+  for (byte i = 0; i<10; i = i+1 )
   {
     PressureReading[i] = analogRead(PinSensor);
     delay(10);
+    pressure = pressure+PressureReading[i];
   }
-  pressure = (PressureReading[1]+PressureReading[2]+PressureReading[3])/3; //average the readings
+
+  pressure = pressure/10; //average the readings
   pressure = pressure*4.8/4095; //voltage
   Serial.print("Voltage =");Serial.print(PressureReading[1]);Serial.print(" - ");Serial.print(PressureReading[2]);Serial.print(" - ");Serial.print(PressureReading[3]);Serial.print(" -  ");Serial.print(pressure);Serial.println(" V ");
   pressure = PressureCalibrationA*pressure+PressureCalibrationB;// Pressure in PSI
@@ -190,12 +196,15 @@ void StartPump()
 {
   digitalWrite(PumpPin,HIGH);
   PumpStatus=1;
-  Blynk.logEvent("pump_start", String("The Pump has started"));
+  //Blynk.logEvent("pump_start", String("The Pump has started"));
+  
 }
 void StopPump()
 {
   digitalWrite(PumpPin,LOW);
   PumpStatus=0;
+  PumpRunningTime=0;
+  Blynk.virtualWrite(V10,0);
 }
 void PumpStartCycle()
 {
@@ -203,13 +212,59 @@ void PumpStartCycle()
   delay(1000);
   StopPump();
 }
-
-// ====== Loops MultiCore ======
-void loop1(){
-
+void PumpManagement(){
+  if (BlynkPumpSwitch == 1){
+    StartPump();
+  }
+  Blynk.virtualWrite(V7,PumpStatus);
+  if (PumpStatus==1)
+  {
+    PumpRunningTime=PumpRunningTime+interval/1000;
+  }
+  if (PumpRunningTime>3 && flow<1)
+  {
+    StopPump();
+  }
+  if (flow>1){
+    StartPump();
+  }
 }
-void loop2(){
 
+BLYNK_WRITE(V8){
+  PressureCalibrationA = param.asFloat();
+}
+BLYNK_WRITE(V9){
+  PressureCalibrationB = param.asFloat();
+}
+BLYNK_WRITE(V10){
+  BlynkPumpSwitch = param.asInt();
+}
+// ====== Loops MultiCore ======
+void loop1(void *pvParameters){
+  while (1) {
+    currentMillis = millis();
+    if (currentMillis - previousMillis > interval) {
+      flow = GetFlow(previousMillis);
+      displayFlow(flow);
+      PressureValue = GetPressure(PRESSURESENSOR);
+      displayPressure(PressureValue);
+      previousMillis = millis();
+      Serial.print("V10: ");Serial.print(BlynkPumpSwitch);Serial.print(" - Wifi Connexion: ");Serial.println(YNBlynkSetup);
+      Serial.println("---------------------------------------------------------");
+      PumpManagement();
+    }
+  }
+}
+void loop2(void *pvParameters){
+  
+  while (1) {
+    currentMillis = millis();
+    if (currentMillis - previousMillis > 100) {
+      SendBlynkValue();
+    }
+    Blynk.run();
+    timer.run();
+  }
 }
 //==========================================
 //================ Setup ===================
@@ -224,8 +279,10 @@ void setup()
   SetupFlow();
   SetupPressure();
   SetupPump();
-  PumpStartCycle();
+  //PumpStartCycle();
+  xTaskCreatePinnedToCore(loop1, "loop1", 16000, NULL, 1, NULL, 0);
   BlynkSetup();
+  xTaskCreatePinnedToCore(loop2, "loop2", 16000, NULL, 10, NULL, 1);
 }
 
 
@@ -234,27 +291,5 @@ void setup()
 //=========================================
 void loop()
 {
-  currentMillis = millis();
-  if (currentMillis - previousMillis > interval) {
-    flow = GetFlow(previousMillis);
-    displayFlow(flow);
-    if (flow>1)
-    {
-      StartPump();
-    }
-    else{
-      StopPump();
-    }
-    PressureValue = GetPressure(PRESSURESENSOR);
-    displayPressure(PressureValue);
-    previousMillis = millis();
-    Serial.println("---------------------------------------------------------");
-    SendBlynkValue();
-    Serial.println(xPortGetCoreID());
-  }
-  if (YNBlynkSetup=true) {
-    Blynk.run();
-    timer.run();
-  }
-
+  
 }
